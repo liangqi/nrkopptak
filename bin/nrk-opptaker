@@ -1,0 +1,2194 @@
+#!/usr/bin/perl
+##############################################################################
+#
+# NRK-OPPTAK / NRK-RECORDER
+# Falkeklubben nettkringkastarlag
+#
+##############################################################################
+##############################################################################
+###################                                         ##################
+##################   #### ####     ####  ###  ####    ####   #################
+##################   ####  ####    #### ##### ####   ####    #################
+##################   ####  ####    ####  ###  ####  ####     #################
+##################   ####   ####   ####       #### ####      #################
+##################   ####    ####  ####       ####  ####     #################
+##################   ####    ####  ####       ####   ####    #################
+##################   ####     #### ####       ####    ####   #################
+##################                                           #################
+##################    ###   ###   ###  ######  ###   ## ##   #################
+##################   ## ##  ## #  ## #   ##   ## ##  ####    #################
+##################    ###   ##    ##     ##   ## ##  ## ##   #################
+###################                                         ##################
+##############################################################################
+##############################################################################
+#
+# Download video and audio from NRK TV, NRK Radio and NRK Skole.
+#
+# http://falkeklubben.blogspot.no/
+# 
+#
+# This script originally based on NRK video and subtitles download script
+# by Ingvar (updated by Morpfh), as well as code and comments from
+# http://ingvar.blog.redpill-linpro.com/2012/05/31/
+#   downloading-hd-content-from-tv-nrk-no/
+# by Ingvar, Isak, Frode, Finn Andersen, Kari Normann, Tengil.
+#
+# Uses AdobeHDS.php (by KSV) + ffmpeg/avconv/mkvmerge/mp4box/mediainfo.
+#
+##############################################################################
+#
+# License: GPLv3
+# Attribution: nrk-opptak av/by Falkeklubben nettkringkastarlag
+#
+###############################################################################
+
+use strict; use utf8;
+sub __config {}
+
+##############################################################################
+##############################################################################
+##############################################################################
+### CONFIG
+
+
+# Transform spaces in filenames to this. Set to emtpy string for no spaces.
+my $FILENAME_SPACE = ' ';
+
+# Make filenames lowercase.
+my $FILENAME_LOWER = 0;
+
+# Make date ISO (yyyy-mm-dd). NRK dates are usually dd.mm.yyyy .
+my $FILENAME_ISO_DATE = 0;
+
+# Skip special characters in filename.
+my $FILENAME_ASCII = 0;
+
+
+##########
+
+
+# Terminal colors
+
+my $USE_COLORS = 1;
+
+my $COL_DEFAULT   = 'reset';      # default color
+my $COL_TITLE     = 'bold cyan';  # video title
+my $COL_DESC      = 'reset';      # description
+my $COL_AVAIL_OK  = 'green';      # availability world wide and not limited by date
+my $COL_AVAIL_NOK = 'red';        # limited availability
+my $COL_CAT       = 'dark';      # categories and duration
+my $COL_EXEC      = 'green';      # external code (AdobeHDS, mkvmerge, etc)
+my $COL_LINE      = 'dark';      # line color in batch mode
+my $COL_ERROR     = 'bold red';   # errors
+my $COL_PROGNAME  = 'dark';      # program name
+my $COL_DONE      = 'dark';      # final line output by the script (number of seconds)
+
+
+##########
+
+
+# Artist metatags.
+my %TAG_ARTISTS = (
+  nrk       => 'NRK',
+  nrktv     => 'NRK TV',
+  nrkradio  => 'NRK Radio',
+  nrkskole  => 'NRK Skole',
+);
+
+# Default album metatag.
+my $TAG_ALBUM = 'Diverse';
+
+
+##########
+
+
+# PHP. Set this to where PHP is if we can't auto-detect it.
+my $PHP = '';
+
+# MP4/MKV converter. Set to 'avconv' or 'ffmpeg', or '' to auto-detect.
+my $FFMPEG = '';
+
+# Set this to a valid subtitle codec for ffmpeg/avconv, or leave it blank
+# for us to guess. This is used for MP4 files only.
+# This is not used at all if MP4Box is installed and enabled.
+my $FFMPEG_SCODEC = '';
+
+# mkvmerge
+my $MKVMERGE = '';
+
+# MP4Box
+my $MP4BOX = '';
+
+# Use MP4Box or not? Set this to 0 if you have MP4Box installed but don't
+# want to use it.
+my $USE_MP4BOX = 1;
+
+# mediainfo
+my $MEDIAINFO = '';
+
+# Path to AdobeHDS.php script. Only needed if we can't auto-detect it.
+my $ADOBEHDS_SCRIPT = '';
+
+# Options to AdobeHDS.php. This can be used to add a proxy. 
+my $ADOBEHDS_OPTIONS = '';
+
+##########
+
+
+# HDCORE. Don't change this unless you know what you're doing.
+my $HDCORE = '2.7.6';
+
+# SESSION_KEY
+my $SESSION_KEY = 'RHRBBUWFNUFD';
+
+
+### END OF CONFIG
+##############################################################################
+##############################################################################
+##############################################################################
+
+sub __main {}
+
+our $NAME = 'nrk-opptak';
+our $BY = 'falkeklubben';
+our $VERSION = '0.1.3';
+our $BUILD = '207'; # in lack of a better word
+our $LANG = 'nb';
+
+##############################################################################
+
+use LWP::UserAgent;
+use HTML::Entities;
+use Encode;
+use Text::Wrap;
+
+
+# Non-essential modules
+my $LOADED_ANSICOLOR;
+if ($USE_COLORS) {
+  eval { require Term::ANSIColor; Term::ANSIColor->import() };
+  $LOADED_ANSICOLOR = $@ ? 0 : 1;
+}
+
+eval { require Encode::Locale };
+unless ($@) {
+  @ARGV = map { decode(locale => $_, 1) } @ARGV;
+}  
+
+
+# utf8
+use utf8;
+binmode STDIN, ":utf8";
+binmode STDOUT, ":utf8";
+binmode STDERR, ":utf8";
+
+
+# Some glabals and setup
+
+my $SCRIPT_NAME = $0;
+$SCRIPT_NAME =~ s/.*\///;
+
+my $start = time();
+
+$Text::Wrap::huge = 'overflow';
+$Text::Wrap::unexpand = 0;
+
+
+# Identification
+_inform( c($COL_PROGNAME) . "$NAME $VERSION ($BUILD) $LANG (GPLv3) $BY" . c() );
+_inform();
+
+# video           download video
+# subs            download subtitles
+# chap            download chapters
+# 
+# flv_file        make and keep flv file
+# mp4_file        make and keep mp4 file
+# mkv_file        make and keep mkv file
+# subs_file       make and keep subs file (srt)
+# chap_file       make and keep chapter file
+#
+# info            display info (metadata)
+# info_file       make info file (metadata)
+# review_file     download and make review file
+# thumb_file      download and store thumbnail file
+#
+# subdir          put files in sub-directory
+
+my %CMD_TABLE = (
+  'f',  [ 'flv_file',       'flv',  'video'                               ],
+  'm',  [ 'mp4_file',       'mp4',  'video',  'subs', 'chap'              ],
+  'M',  [ 'mp4_file',       'mp4',  'video',                  'bare_mp4'  ],
+  'k',  [ 'mkv_file',       'mkv',  'video',  'subs', 'chap'  ],
+  'K',  [ 'mkv_file',       'mkv',  'video',                  'bare_mkv'  ],
+  's',  [ 'subs_file',      'srt',            'subs'                      ],
+  'c',  [ 'chap_file',      'chp',                    'chap'              ], 
+  'i',  [ 'info'                                                          ],
+  'I',  [ 'info_file',      'txt',                                        ],
+  't',  [ 'test'                                                          ],
+  'Y',  [ 'clean_up' ],
+  'h',  [ 'help'                                                          ],
+  '1',  [ 'high_quality'],
+  '2',  [ 'medium_quality'],
+  '3',  [ 'low_quality'],
+  'l',  [ 'live'],
+  'x',  [ 'excalibur',
+            'subs_file', 'subs',
+            'chap_file', 'chap',
+            'info_file',
+            'review_file',
+            'thumb_file',
+            'subdir',
+        ],
+  'n',  [ 'interactive'],
+  'a',  [ 'append_counter',   'non_interactive' ],
+  'y',  [ 'overwrite',        'non_interactive' ],
+  'v',  [ 'verbose'],
+  'q',  [ 'quiet'],
+  'd',  [ 'debug'],
+);
+
+
+my ($opts, $duration, $url, $outname);
+
+if (!@ARGV) {}
+elsif (@ARGV==1) {
+  if ($ARGV[0] =~ /^https?:/) {
+    $url = shift @ARGV;
+  } else {
+    $opts = shift @ARGV;
+  }
+}
+elsif (@ARGV==2) {
+  $opts = shift @ARGV;
+  $url = shift @ARGV;
+}
+elsif (@ARGV>2) {
+  $opts = shift @ARGV;
+  $duration = shift @ARGV if $ARGV[0] =~ /^[\d:]+$/;
+  $url = shift @ARGV;
+  $outname = shift @ARGV if @ARGV;
+}
+
+
+# Parse options
+my $cmd = {};
+$opts ||= 'h' unless $url;
+
+#if (-e $url && $url =~ /\.flv$/) {
+#  # we're dealing with a file not a URL.
+#  $cmd->{video_rerun} = 1;
+#  _die('Disse valgene kan ikke brukes for filer: f s c I 1 2 3 l x')
+#    if $opts =~ /[fscI123lx]/;
+#  _die('Innfil krevet ut-filnavn.') unless $outname;
+#}
+
+foreach my $opt (split //, $opts) {
+  if ($CMD_TABLE{$opt}) {
+    foreach my $tag ( @{$CMD_TABLE{$opt}} ) { $cmd->{$tag}++ }
+  } 
+  else {
+    _die("Ukjent argument '$opt'.");
+  }
+}
+
+if ($duration =~ /^(\d+):(\d+)$/) {
+  $duration = $1*60 + $2;
+}
+elsif ($duration =~ /^\d+$/) {
+  $duration *= 60;
+}
+elsif ($duration) {
+  _die('Ugyldig varighet.');
+}
+
+
+# Verbosity
+my $DEBUG = 1 if $cmd->{debug} || $cmd->{test};
+my $QUIET = $cmd->{quiet};
+my $VERBOSE = $cmd->{verbose};
+
+
+# OS
+my $OS_MAC = $^O =~ /darwin/i ? 1 : 0;
+my $OS_WIN = $^O =~ /windows/i ? 1 : 0;
+
+
+# Cleap up
+if ($cmd->{clean_up}) {
+  $QUIET = 0;
+  cleanup_surroundings();
+  exit;
+}
+
+
+#
+if (!$url && !$DEBUG && !$cmd->{help}) {
+  _die('Mangler URL.');
+}
+if ($cmd->{excalibur} && !$cmd->{video}) {
+  _die('Valg x krever en av v, V, m, M eller f.');
+}
+
+
+# URL aliases (for live)
+if ($cmd->{live}) {
+  $url = 'http://tv.nrk.no/direkte/nrk1' if lc($url) eq 'nrk1';
+  $url = 'http://tv.nrk.no/direkte/nrk2' if lc($url) eq 'nrk2';
+  $url = 'http://tv.nrk.no/direkte/nrk3' if lc($url) eq 'nrk3';
+  $url = 'http://tv.nrk.no/direkte/nrksuper' if lc($url) eq 'nrksuper';
+}
+
+
+# Help
+if ( $cmd->{help} ) {
+  detect_helpers(1);
+  help();
+  check_helpers();
+  exit;
+}
+
+
+
+# Find paths to scripts and programs
+detect_helpers();
+
+# Need PHP if downloading video
+if (!$OS_WIN && $cmd->{video} && !$PHP) {
+  _die('Feil: Fant ikke PHP. Avslutter.');
+}
+
+# Can't download video without HDS-script.
+if ($cmd->{video} && !$ADOBEHDS_SCRIPT) {
+  _die('Feil: Fant ikke AdobeHDS.php. Avslutter.');
+}
+
+if (!$FFMPEG) {
+  _die('Feil: ffmpeg (eller avconv) ble ikke funnet. Bruk flv istedenfor.');
+}
+
+
+check_surroundings() if $DEBUG;
+
+
+# Debug: show paths
+if ($DEBUG) {
+  print "PHP:       $PHP\n";
+  print "ADOBEHDS:  $ADOBEHDS_SCRIPT\n";
+  print "FFMPEG:    $FFMPEG ($FFMPEG_SCODEC)\n";
+  print "MKVMERGE:  $MKVMERGE\n";
+  print "MP4BOX:    $MP4BOX\n";
+  print "MEDIAINFO: $MEDIAINFO\n";
+
+  if ($opts) {
+    print "\n";
+    print "Kommandoer og valg: $opts" . "\n";
+    my $cmdlit;
+    foreach my $c (sort keys %$cmd) {
+      $cmdlit .= "$c ";
+    }
+    print "         som betyr: $cmdlit" . "\n";
+  }
+  if ($duration) {
+    print "\n";
+    print 'Lengde:     ' . $duration . "\n";
+  }
+  if ($url) {
+    print "\n";
+    print 'URL:        ' . $url . "\n";
+  }
+  if ($cmd->{test}) {
+    _inform();
+    test_more();
+    _die();
+  }
+  print "\n";
+}
+
+
+
+# Download single URL
+if ($url =~ /^https?:/ || $cmd->{video_rerun}) {
+  process($cmd, $url, $outname, $duration);
+} 
+
+# Batch file
+elsif (-e $url) {
+  
+  _inform('Advarsel: Interaktiv satsvis kjøring.' . "\n") unless $cmd->{non_interactive};
+  
+  $cmd->{batch_mode}=1;
+  my @urls = read_batchfile($url);
+
+  foreach my $url (@urls) {
+    _inform( c($COL_LINE) . "---------------------------------------------------------------------------" . c() );
+    process($cmd, $url, $outname, $duration);
+  }
+
+}
+
+# Something else
+else {
+  _die("Feil: Fant ikke fila: $url");
+}
+
+my $time_taken = time()-$start;
+
+my $mm = int($time_taken / 60);
+my $ss = $time_taken % 60;
+
+_inform( c($COL_PROGNAME) . "$mm minutter and $ss sekunder" . c() . "\n" );
+
+col('reset');
+print "\n" if $QUIET<=2;
+
+
+
+##############################################################################
+##############################################################################
+
+sub process {
+  my ($cmd, $url, $outname, $duration) = @_;
+
+  my $expect_output = 1
+    if $cmd->{video} || $cmd->{subs_file} || $cmd->{chap_file} || $cmd->{info_file};
+
+  my $output_to_dir = 1 if $cmd->{subdir};
+
+  my $html = get_content($url);
+
+
+  # Quality
+  my $quality = 'high';
+  $quality = 'low' if $cmd->{low_quality};
+  $quality = 'medium' if $cmd->{medium_quality};
+  $quality = 'high' if $cmd->{high_quality};
+
+
+  # Metadata
+  my $meta = {};
+  $meta = get_metadata($html, get_source($url));
+  
+  
+  # Display title and some info
+  print_program_info(*STDOUT, $meta) unless $QUIET>=2;
+  
+
+  # Filename
+  my $filename_std = title2filename(
+    $meta->{base_filename}, $quality, $duration, $cmd->{live}
+  ); 
+  my $filename;
+
+  $outname =~ s/\.(mp4|flv|mkv|srt|chp|txt)$//; # in case user adds extension
+  
+  if ($outname && $cmd->{batch_mode}) {   # batch mode
+    $filename = title2filename(
+      "$outname - $meta->{base_filename}", $quality, $duration, $cmd->{live}
+    );
+  }
+  elsif ($outname) {
+    $filename = $outname;
+  }
+  else {
+    $filename = $filename_std;
+  }
+
+  my $subdir;
+  if ($expect_output && $output_to_dir) {
+    $subdir = $filename;
+    mkdir($subdir) unless -e $subdir;
+    $filename = "$subdir/$filename_std";
+  }
+
+  $filename = prevent_duplicate_filename($filename, $cmd)
+    unless $cmd->{overwrite};
+
+  my $mp4file = "$filename.mp4";          # mpeg4
+  my $mkvfile = "$filename.mkv";          # matroska
+  my $flvfile = "$filename.flv";          # flash video
+  my $srtfile = "$filename.srt";          # subtitles
+  my $chpfile = "$filename.chp";          # chapters
+  my $txtfile = "$filename.txt";          # metadata
+  my $jpgfile = "$filename.jpg";          # thumbnail (x)
+  my $revfile = "$filename.html";         # review (x)
+  
+  my $ttxt_tmpfile = temp_filename('ttxt'); # for mp4 chapters  
+
+  # Get urls
+  my $manifest_url = get_manifest_url($html, $cmd->{live}, $meta->{source} );
+  my $subtitles_url = get_subtitles_url($html);
+  my $review_url = get_review_url($html);
+
+  $cmd->{video} = 0 unless $manifest_url;
+
+
+  # Video flv - This is the actual download
+  if ($cmd->{video}) {
+    download_video($manifest_url, $flvfile, $quality, $duration, $cmd->{live});
+    if (-e $flvfile) {
+      extend_metadata($meta, $flvfile); # metadata from the flv file
+    } else {
+      _warn('Feil ved nedlasting av video.');
+      $cmd->{video} = 0;
+    }
+  }
+
+  # Display metadata
+  if ($cmd->{info}) {
+    print_metadata(*STDOUT, $meta, $url, $manifest_url, $subtitles_url, $review_url, $html);
+  }
+
+  # Save metadata
+  if ($cmd->{info_file}) {
+    store_metadata($txtfile, $meta, $url, $manifest_url, $subtitles_url, $review_url, $html);
+  }
+
+  # Subtitles
+  if ($cmd->{subs}) {
+    if ($subtitles_url) {
+      download_subtitles($subtitles_url, $srtfile, $duration, $meta);
+    }
+    else {
+      if ($cmd->{subs_file} && !$cmd->{mp4_file} && !$cmd->{mkv_file}) {
+        _warn('Ingen undertekster tilgjengelig.');
+      } else {
+        _inform('Ingen undertekster tilgjengelig.');
+      }
+      $cmd->{subs_file} = 0;      
+      $cmd->{subs} = 0;
+    }
+  }
+
+  # Chapters
+  if ($cmd->{chap}) {
+    if ( my $chapters = extract_chapters($html, $chpfile, $duration, $meta) ) {
+      if ($cmd->{mp4_file}) {
+        store_ttxt_chapters( $chapters, $ttxt_tmpfile );
+      }
+    }
+    else {
+      if ($cmd->{chap_file} && !$cmd->{mp4_file} && !$cmd->{mkv_file}) {
+        _warn('Ingen kapitler tilgjengelig.');
+      } else {
+        _inform('Ingen kapitler tilgjengelig.');
+      }
+      $cmd->{chap_file} = 0;
+      $cmd->{chap} = 0;
+    }
+  }
+
+  # Thumbnail
+  if ($cmd->{thumb_file}) {
+    my $thumb_url =
+      $meta->{'meta_og:image'} ||
+      $meta->{meta_artikkel_frimerke} ||
+      $meta->{meta_series_frimerke} ||
+      $meta->{meta_article_thumbnail};
+  
+    if ($thumb_url) {  
+      _inform('Laster ned frimerkebilde...');
+      get_content($thumb_url, $jpgfile);
+      if (!-e $jpgfile) {
+        _inform('Frimerke ikke tilgjengelig.');
+        $cmd->{thumb_file} = 0;
+      }
+    } else {
+      _inform('Frimerke ikke tilgjengelig.');
+      $cmd->{thumb_file} = 0;
+    }
+  }
+
+  # Review
+  if ($cmd->{review_file} && $review_url) {
+    unless ( download_review($review_url, $revfile, $meta) ) {
+      _inform('Omtale ikke tilgjengelig.');
+    }
+  }
+  elsif ($cmd->{review_file}) {
+    _inform('Omtale ikke tilgjengelig.');
+  }
+
+  # Video mp4
+  if ($cmd->{video} && $cmd->{mp4_file}) {
+    my $result = convert_to_mp4($flvfile, $srtfile, $ttxt_tmpfile, $mp4file, $meta, $cmd->{bare_mp4});
+
+    if ($result!=0) {
+      if ($cmd->{flv_file}) {
+        _warn('Feil ved ompakking til mp4.');
+      } else {
+        _warn('Feil ved ompakking til mp4.' . ' ' . 'Beholder flv-fil.');
+      }
+      $cmd->{mp4_file} = 0;
+      $cmd->{flv_file} = 1;
+    }
+  
+  }
+
+
+  # Video mkv
+  if ($cmd->{video} && $cmd->{mkv_file}) {
+    my $result = convert_to_mkv($flvfile, $srtfile, $chpfile, $mkvfile, $meta, $cmd->{bare_mkv});
+
+    if ($result!=0) {
+      if ($cmd->{flv_file}) {
+        _warn('Feil ved ompakking til mkv.');
+      } else {
+        _warn('Feil ved ompakking til mkv.' . ' ' . 'Beholder flv-fil.');
+      }
+      $cmd->{mkv_file} = 0;
+      $cmd->{flv_file} = 1;
+    }
+
+  }
+
+
+
+
+  # Clean up
+  unlink('Cookies.txt');
+  unlink($ttxt_tmpfile) if -e $ttxt_tmpfile;
+
+  # Lose flv, srt and chp files unless we've been asked to keep them
+  if ($cmd->{video} && !$cmd->{flv_file}) {
+    unlink($flvfile);
+  }
+  if ($cmd->{subs} && !$cmd->{subs_file}) {
+    unlink($srtfile);
+  }
+  if ($cmd->{chap} && !$cmd->{chap_file}) {
+    unlink($chpfile);
+  }
+
+  # Show filenames
+  if ($expect_output && $QUIET<3) {
+    _inform();
+    if ( $cmd->{video} || $cmd->{subs_file} || $cmd->{chap_file} || $cmd->{info_file} ) {
+      print 'Filer' . "\n";
+
+      if ($cmd->{video}) {
+        print '  ' . 'Videofil:     ' . wo_path($mp4file) . "\n" if $cmd->{mp4_file};
+        print '  ' . 'Videofil:     ' . wo_path($mkvfile) . "\n" if $cmd->{mkv_file};
+        print '  ' . 'Videofil:     ' . wo_path($flvfile) . "\n" if $cmd->{flv_file};
+      }
+      print '  ' . 'Undertekster: ' . wo_path($srtfile) . "\n" if $cmd->{subs_file};
+      print '  ' . 'Kapitler:     ' . wo_path($chpfile) . "\n" if $cmd->{chap_file};
+      print '  ' . 'Metadata:     ' . wo_path($txtfile) . "\n" if $cmd->{info_file};
+      print '  ' . 'Omtale:       ' . wo_path($revfile) . "\n" if $cmd->{review_file} && -e $revfile;
+      print '  ' . 'Frimerke:     ' . wo_path($jpgfile) . "\n" if $cmd->{thumb_file} && -e $jpgfile;
+      if ($subdir) {
+        print "\n" . 'I katalogen' . "\n";
+        print "  $subdir\n";
+      }
+
+    }
+    else {
+      print 'Ingen filer ble lagra.' . "\n";
+    }
+    _inform();
+  }
+
+}
+
+
+##############################################################################
+
+sub print_program_info {
+  my ($f, $meta) = @_;
+  
+  print $f c($COL_TITLE) . wrap('', '', "$meta->{title}") . c() . "\n";
+
+  my $region = $meta->{availability} || '?';
+  my $timespan = lc($meta->{available_until});
+  $timespan ||= "$meta->{meta_rightsto}";
+  $timespan = '' if $timespan =~ /ing\w{1,2} begr/;
+  $timespan = ", til $timespan" if $timespan;
+  my $col = $COL_AVAIL_OK;
+  $col = $COL_AVAIL_NOK if ($region =~ /norge/i) || ($timespan);
+
+  if ($col eq $COL_AVAIL_NOK) {
+    print $f c($col) . "Kun tilgjengelig i $region$timespan." . c() . "\n";
+  }
+  
+  if ($meta->{meta_description}) {
+    my $desc = $meta->{meta_description};
+    $desc .= " [$meta->{age_restriction}]"
+      if $meta->{age_restriction} && $meta->{age_restriction} !~ /tillatt for alle/i;
+    $desc = wrap('', '', $desc);
+    print $f c($COL_DESC) . "$desc" . c() . "\n";
+  }
+
+  print $f c($COL_CAT) . $TAG_ARTISTS{$meta->{source}};
+  print $f ", $meta->{meta_kategori_navn}" if $meta->{meta_kategori_navn};
+  print $f ", $meta->{duration_lit}" if $meta->{duration_lit};
+  print $f c() . "\n\n";  
+}
+
+
+##############################################################################
+
+sub get_metadata {
+  my ($html, $source) = @_;
+  my %data;
+  
+  $data{source} = $source;  
+
+  # screen  
+  $data{title} = $1 if $html =~ /<title>[\s\-–]*(.*?)\s*<\/title>/;
+  $data{title} ||= 'Ukjent';
+  $data{base_filename} = $data{title};
+  
+  if ($source eq 'nrkskole') {
+    $data{title} =~ s/\s*\-*\s*(Video\s*\-*\s*)?NRK\s*Skole\s*$//i;
+  }
+  elsif ($source eq 'nrkradio') {
+    $data{title} =~ s/^\s*NRK(\s*Radio)?[\s\-]*//i;
+  }
+  else {
+    $data{title} =~ s/^\s*NRK(\s*TV)?[\s\-]*//i;
+  }
+  
+  $data{availability}       = $1 if $html =~ /<dt>\s*Tilgjengelig i.*?<dd>\s*(.*?)\s*<\s*\/\s*dd\s*>/is;
+  $data{first_transmission} = $1 if $html =~ /<dt>\s*F.{1,10}rste gang sendt.*?<dd>\s*(.*?)\s*<\s*\/\s*dd\s*>/is;
+  $data{last_transmission}  = $1 if $html =~ /<dt>\s*Siste gang sendt.*?<dd>\s*(.*?)\s*<\s*\/\s*dd\s*>/is;
+  $data{series_title}       = $1 if $html =~ /<dt>\s*Serietittel.*?<dd>\s*(.*?)\s*<\s*\/\s*dd\s*>/is;
+  $data{episode_title}      = $1 if $html =~ /<dt>\s*Episodetittel.*?<dd>\s*(.*?)\s*<\s*\/\s*dd\s*>/is;  
+  $data{duration_lit}       = $1 if $html =~ /<dt>\s*Varighet.*?<dd>\s*(.*?)\s*<\s*\/\s*dd\s*>/is;
+  $data{series_description} = $1 if $html =~ /<h3>\s*Seriebeskrivelse.*?<p>\s*(.*?)\s*<\s*\/\s*p\s*>/is;
+
+  $data{age_restriction}    = $1 if $html =~ /<mark\s+class="age-restr.*?<\/mark>\s*(.*?)\s*<\s*\/\s*li\s*>/is;
+  $data{available_until}    = $1 if $html =~ /<strong>\s*Tilgjengelig til.*?<\/strong>\s*(.*?)\s*<\s*\/\s*li\s*>/is;
+
+  # meta
+  while ($html =~ s/<meta[^>]+(name|property)="([^>]*?)"[^>]+content="([^>]*?)"//s) {
+    my ($name, $content) = ($2, $3);
+    $name =~ s/^\s*(.*?)\s*$/$1/sg;
+    $data{"meta_$name"} = $content;
+  }
+
+  # fix
+  $data{first_transmission} =~ s/\s*(<.*?>|")\s*/ /sg;
+  $data{last_transmission}  =~ s/\s*(<.*?>|")\s*/ /sg;
+  $data{age_restriction}    =~ s/\s*(<.*?>|")\s*/ /sg;
+  $data{available_until}    =~ s/\s*(<.*?>|")\s*/ /sg;
+
+  foreach my $key (keys %data) {
+    $data{$key} =~ s/\s+/ /sg;
+    $data{$key} =~ s/^\s*(.*?)\s*$/$1/s;
+    $data{$key} = decode_entities($data{$key});
+  }
+
+  if (!$data{duration_lit} && $data{meta_media_duration}) {
+    $data{duration_lit} = $data{meta_media_duration};
+    $data{duration_lit} =~ s/\..*//;
+    $data{duration_lit} .= ' minutter';
+  }
+
+  $data{duration_lit_mins}  = $data{duration_lit};
+  $data{duration_lit_mins}  =~ s/[^\d]//g;
+
+  # Add space after semi-colon to make these more readable.
+  # We have to pick by hand as to not break URLs.
+  foreach my $key (qw(
+    allkeywords
+    keywords
+    kategorier_id
+    kategorier_navn
+    medvirkende
+    lastTransmissionDate
+  )) {
+    $data{"meta_$key"} =~ s/;/; /g;
+  }
+  
+  if ($data{'meta_og:video:width'} && $data{'meta_og:video:height'}) {
+    $data{aspect_ratio} = $data{'meta_og:video:width'} / $data{'meta_og:video:height'};
+    
+    $data{aspect_ratio} = '16:9' if $data{aspect_ratio} == 16/9;
+    $data{aspect_ratio} = '16:10' if $data{aspect_ratio} == 16/10;
+    $data{aspect_ratio} = '14:9' if $data{aspect_ratio} == 14/9;
+    $data{aspect_ratio} = '4:3' if $data{aspect_ratio} == 4/3;
+  }
+
+  $data{album} = $data{series_title};
+  $data{album} ||= $data{meta_seriestitle};
+  $data{album} ||= $data{meta_kategori_navn};
+  $data{album} ||= $TAG_ALBUM;
+
+  return \%data;
+}
+
+
+##############################################################################
+# To make sure subtitles don't go beyond the length of the video
+# we need to know the duration. We prefer mediainfo but will also try ffmpeg.
+sub extend_metadata {
+  my ($meta, $file) = @_;
+
+  my ($dur_msec, $dur, $bitrate);
+
+  if ($MEDIAINFO) {
+    ($dur_msec, $dur, $bitrate) = split /&/,
+      `$MEDIAINFO --Inform="General;%Duration%&%Duration/String3%&%OverallBitRate%&" "$file"`;
+  }
+  elsif ($FFMPEG) {
+    my $line = `$FFMPEG -i "$file" 2>&1`;
+    $dur = $1 if $line =~ /Duration:\s+([\d\:\.]+)/si;
+    $dur .= "0" if $dur =~ /\.\d\d$/;
+    my ($hh, $mm, $ss, $msec) = split /[\:\.]/, $dur;
+    $dur_msec = $hh*60*60*1000 + $mm*60*1000 + $ss*1000 + $msec;
+    $dur_msec -= 5; # ffmpeg rounds off msec (.317) to csec (.32).
+                    # Don't want dur to be too long (.315 is better than .320).
+                    # Nitpicking 5 msec (omg).
+
+    $bitrate = $1 if $line =~ /bitrate:\s+(\d+)/si;
+    $bitrate *= 1000; # says kb not kib
+  }
+
+  $meta->{duration_msec} = $dur_msec;
+  $meta->{duration} = $dur;
+  $meta->{bitrate} = $bitrate;
+}
+
+##############################################################################
+
+sub print_metadata {
+  my ($f, $meta, $url, $manifest_url, $subtitles_url, $review_url, $html) = @_;
+
+  print $f 'Informasjon' . "\n";
+  foreach my $key (grep !/^meta_/, sort keys %$meta) {
+    printf($f "  %-30s %s\n", $key, $meta->{$key});
+  }
+  print $f "\n";
+
+  print $f 'Nettadresser' . "\n";
+  printf($f "  %-30s %s\n", 'main', $url);
+  printf($f "  %-30s %s\n", 'manifest', $manifest_url);
+  printf($f "  %-30s %s\n", 'subtitles', $subtitles_url);
+  printf($f "  %-30s %s\n", 'review', $review_url);
+  print $f "\n";
+
+  print $f 'Metadata' . "\n";
+  foreach my $key (grep /^meta_/, sort keys %$meta) {
+    my $name = $key;
+    $name =~ s/^meta_//;
+    my $content =
+      wrap( '                                 ',
+            '                                 ',
+            $meta->{$key});
+    $content =~ s/^\s*//s;
+
+    if ($content =~ /\n/s) {
+      printf($f "\n  %-30s %s\n\n", $name, $content );
+    }
+    #elsif (length($content)>45) {
+    #  print "  $name\n    $content\n";
+    #}
+    else {
+      printf($f "  %-30s %s\n", $name, $content );
+    }
+  }
+  print $f "\n";
+
+  my $chapters = extract_chapters($html);
+
+  print $f 'Kapitler' . "\n";
+  if ($chapters) {
+    my $n;
+    foreach my $c (sort keys %$chapters) {
+      $n++;
+      printf($f "  %2d. %s\n", $n, $chapters->{$c});
+    }
+  } else {
+    print $f '  ' . 'Ingen kapitler' . "\n";
+  }
+  print $f "\n";
+
+}
+
+
+##############################################################################
+
+sub store_metadata {
+  my ($outfile, $meta, $url, $manifest_url, $subtitles_url, $review_url, $html) = @_;
+
+  if (open(my $f, ">$outfile")) {
+    binmode $f, ":utf8";
+    my $color_state = $USE_COLORS;
+    $USE_COLORS = 0;
+    print_program_info($f, $meta);
+    print_metadata($f, $meta, $url, $manifest_url, $subtitles_url, $review_url, $html);
+    close $f;
+    $USE_COLORS = $color_state;
+  } else {
+    _warn('Feil ved skriving til fil: ' . $outfile);
+  }    
+}
+
+##############################################################################
+
+sub meta2tags {
+  my ($meta) = @_;
+  
+  my %tags;
+  
+  $tags{title} = $meta->{title};
+  $tags{artist} = $TAG_ARTISTS{$meta->{source}};
+  $tags{album} = $meta->{album};
+
+  $tags{description}  = $meta->{meta_description};
+  if ($meta->{meta_kategori_navn}) {
+    $tags{description} .= " ($meta->{meta_kategori_navn})";
+  }
+
+  foreach my $key (keys %tags) {
+    $tags{$key} =~ s/\:([^\:]+)=/: $1=/g; # let's not confuse mp4box
+    $tags{$key} =~ s/"/'/g;
+    $tags{$key} =~ s/\s+/ /sg; # no line breaks
+  }
+  
+  return \%tags;
+}
+
+
+##############################################################################
+
+sub title2filename {
+  my ($title, $quality, $duration, $is_live) = @_;
+
+  # Get rid of the most problematic characters. Only leads to trouble.
+  $title =~ s/(\d):(\d)/$1;$2/g;
+  $title =~ s/:/ - /g;
+  $title =~ s/\// - /g;
+  $title =~ s/\?|\*//g;
+
+  # start time
+  if ($is_live) {
+    my ($ss, $mm, $hh, $d, $m, $y) = localtime();
+    $title .= sprintf(" - %02d.%02d.%04d %02d.%02d.%02d", $d, $m+1, $y+1900, $hh, $mm, $ss);
+  }
+
+  # duration
+  $title .= ' - ' . int($duration/60) . ' min' if $duration;
+
+  # quality
+  $title .= " - $quality" unless $quality eq 'high';
+
+  # ascii
+  if ($FILENAME_ASCII) {
+    $title =~ s/[æä]/ae/g;
+    $title =~ s/[øö]/oe/g;
+    $title =~ s/[å]/aa/g;
+    $title =~ s/[ÆÄ]/Ae/g;
+    $title =~ s/[ØÖ]/Oe/g;
+    $title =~ s/[Å]/Aa/g;
+    $title =~ tr/âãàáëêẽèéïîĩìíôõòóũûũùú/aaaaeeeeeiiiiioooouuuuu/;
+    $title =~ s/[^a-zA-Z\d_\-\:\s\.,;+=\(\)!#\$%]//g;
+  }
+
+  # iso date
+  $title =~ s/(\d\d)\.(\d\d).(\d\d\d\d)/$3-$2-$1/g if $FILENAME_ISO_DATE;
+
+  #
+  $title =~ s/\s+/$FILENAME_SPACE/g;
+  $title = lc($title) if $FILENAME_LOWER;
+
+  $title =~ s/\s+/ /g;
+  $title =~ s/^\s*//;
+  $title =~ s/\s*$//;
+  $title =~ s/\s*\-*$//;
+
+  return $title;
+}
+
+
+##############################################################################
+
+sub prevent_duplicate_filename {
+  my ($filename, $cmd) = @_;
+  my $original = $filename;
+  
+  while (
+          ($cmd->{mp4_file}     && -e "$filename.mp4") ||
+          ($cmd->{mkv_file}     && -e "$filename.mkv") ||
+          ($cmd->{video}        && -e "$filename.flv") ||
+          ($cmd->{chap}         && -e "$filename.chp") ||
+          ($cmd->{subs}         && -e "$filename.srt") ||
+          ($cmd->{info_file}    && -e "$filename.txt") ||
+          ($cmd->{thumb_file}   && -e "$filename.jpg") ||
+          ($cmd->{review_file}  && -e "$filename.html")
+  ) {
+  
+    if ($filename =~ /^(.*?)\s+\[(\d+)\]$/) {
+      my $n = $2;
+      $n++;
+      $filename = $1 . $FILENAME_SPACE . "[$n]";
+    } else {
+      $filename .= $FILENAME_SPACE . "[2]";
+    }
+
+  }
+  
+  if ($filename ne $original) {
+    my $action;
+    
+    if ($cmd->{append_counter}) {
+      _inform('Filer finnes allerede: ' . ' ' . $original);
+      $action = 'key<t>';
+    } else {
+      print 'Filer finnes allerede: ' . "\n";
+      
+      print "  $original.mp4\n"  if -e "$original.mp4"  && $cmd->{mp4_file};
+      print "  $original.mkv\n"  if -e "$original.mkv"  && $cmd->{mkv_file};
+      print "  $original.flv\n"  if -e "$original.flv"  && $cmd->{video};
+      print "  $original.srt\n"  if -e "$original.srt"  && $cmd->{subs};
+      print "  $original.chp\n"  if -e "$original.chp"  && $cmd->{chap};
+      print "  $original.txt\n"  if -e "$original.txt"  && $cmd->{info_file};
+      print "  $original.jpg\n"  if -e "$original.jpg"  && $cmd->{thumb_file};
+      print "  $original.html\n" if -e "$original.html" && $cmd->{review_file};
+    
+      print "\n" . 'Overskriv, legg til Teller eller Avbryt (o/t/A)? ';
+      $action = lc(<STDIN>);
+      chomp $action;
+      $action = "key<$action>";
+      print "\n";
+    }
+    
+    if ($action eq 'key<o>') {
+      return $original;
+    }
+    elsif ($action eq 'key<t>') {
+      _inform('Endra filnavn til:    ' . ' ' . $filename . "\n");
+      return $filename;
+    }
+    else {
+      _die('Avslutter.' . "\n");
+    }
+  }
+  
+  return $filename;
+}
+
+
+##############################################################################
+
+sub get_source {
+  my ($url) = @_;  
+  
+  if ($url =~ /^https?:\/\/(www\.)?nrk\.no\/skole\//) {
+    return 'nrkskole';
+  }
+  elsif ($url =~ /^https?:\/\/tv\.nrk\.no\//) {
+    return 'nrktv';
+  }
+  elsif ($url =~ /^https?:\/\/radio\.nrk\.no\//) {
+    return 'nrkradio';
+  }
+  else {
+    return 'nrk';
+  }
+  
+}
+
+
+##############################################################################
+
+sub get_manifest_url {
+  my ($html, $use_session_key, $source) = @_;
+
+  my $url;
+
+  if ($source eq 'nrkskole' || $source eq 'nrk') {
+    $url = get_manifest_url_nrkembed($html, $use_session_key);
+  } else {
+    $url = get_manifest_url_nrktv($html, $use_session_key);
+  }
+
+  _warn('Adressa til manifestet ser ikke riktig ut.' . "\n$url\n") if $url && $url !~ /\.f4m\b/;
+ 
+  unless ($url) {   
+    _warn('Feil: Fant ikke manifestet!');
+    return undef;
+  }
+}
+  
+
+##############################################################################
+
+sub get_manifest_url_nrktv {
+  my ($html, $use_session_key) = @_;
+
+  if ($html =~ /data-media\s*=\s*"(.*?)"/) {
+    my $url = $1;
+    
+    if ($url) {
+      $url =~ s/\?ma=on$// if ($use_session_key && $SESSION_KEY);
+      
+      if ($url =~  /\?/) {
+        $url .= "&hdcore=$HDCORE";
+      } else {
+        $url .= "?hdcore=$HDCORE";
+      }
+      $url .= "&g=$SESSION_KEY" if ($use_session_key && $SESSION_KEY);
+      return $url;
+    }
+  }     
+
+  return undef;
+}
+
+
+##############################################################################
+
+sub get_manifest_url_nrkembed {
+  my ($html, $use_session_key) = @_;
+  
+  my $id;
+  
+  # nrk.no/skole/klippdetalj
+  if ($html =~ /\bdata-nrk-id\s*=\s*"(.*?)"/) {
+    $id = $1;
+  }
+  # nrk.no/embed/PS*
+  elsif ($html =~ /\bdata-id\s*=\s*"(PS\*)?(.*?)"/) {
+    $id = $2;
+  }
+  
+  if ($id) {
+    #_inform("MF: ID=$id");
+    
+    my $js = get_content("http://v3.psapi.nrk.no/public/mediaelement/$id");
+    
+    if ($js =~ /mediaUrl":"(http.*?)"/) {
+      my $url = $1;
+      if ($url) {
+        #_inform("MF: JS-URL=$url");
+        $url =~ s/\\\//\//g;
+        #_inform("MF: URL=$url");
+        $url .= "?hdcore=$HDCORE";
+        return $url;
+      }
+    }
+  }
+
+  return undef;
+}
+
+
+##############################################################################
+
+sub get_subtitles_url {
+  my ($html) = @_;
+
+  if ($html =~ /data-subtitlesurl\s*=\s*"(.*?)"/) {
+    my $url = $1;
+    $url = "http://tv.nrk.no$url" if $url =~ /^\//;
+    return $url;
+  }
+
+  return undef;
+}
+
+
+##############################################################################
+
+sub get_review_url {
+  my ($html) = @_;
+  
+  my $url  = $1 if $html =~ /"(\/programreview\/.*?)"/is;
+  $url = "http://tv.nrk.no$url" if $url =~ /^\//;
+  return $url;
+}
+
+
+##############################################################################
+
+sub download_video {
+  my ($manifest, $outfile, $quality, $duration, $is_live) = @_;
+
+  _inform('Laster ned video...');
+
+  _inform('Press Ctrl-C for å stoppe opptaket.') if $is_live && !$duration;
+
+  my $more_opts;
+  $more_opts .= " --duration $duration" if $duration;
+  $more_opts .= " $ADOBEHDS_OPTIONS" if $ADOBEHDS_OPTIONS;
+
+  my $tempdir;
+  $tempdir = 'temp' if -d 'temp';
+  $tempdir = 'tmp' if -d 'tmp';
+
+  if ($tempdir) {
+    if (chdir($tempdir)) {
+      $more_opts .= qq( --outdir .. );
+    } else {
+      $tempdir = undef;
+    }
+  }
+
+  my $redir = ">/dev/null" if $QUIET;
+
+  my $result = _system(qq(
+    $PHP $ADOBEHDS_SCRIPT
+      --quality $quality 
+      --delete 
+      --outfile "$outfile" 
+      --manifest "$manifest" 
+      $more_opts
+      $redir 
+  ));
+
+  chdir('..') if $tempdir;
+  
+  _inform();
+  
+  return $result;
+}
+
+
+##############################################################################
+
+sub convert_to_mp4 {
+  my ($flvfile, $srtfile, $chpfile, $mp4file, $meta, $bare) = @_;
+  my $tags = meta2tags($meta);
+  
+  _inform('Pakker mp4...');
+
+  my $subopts;
+  my $ffmpeg_outfile;
+  my $run_mp4box = 0;
+  
+  if ( $MP4BOX && (-e $srtfile || -e $chpfile) && !$bare ) {
+    $run_mp4box = 1;
+    $ffmpeg_outfile = temp_filename('mp4');
+  } else {
+    $ffmpeg_outfile = $mp4file;
+    
+    # Use ffmpeg for subtitles if MP4Box is not found (or disabled)
+    if (-e $srtfile && $FFMPEG_SCODEC && !$bare) {
+      $subopts = qq(-i "$srtfile" -scodec $FFMPEG_SCODEC -metadata:s:s:0 language=nor -map 0 -map 1);
+      _inform('  ' . 'Tar med undertekster.');
+    }
+  }
+  
+  my $loglevel = 'error';
+  $loglevel = 'info' if $VERBOSE;
+
+  my $result = _system(qq(
+    $FFMPEG -v $loglevel
+      -i "$flvfile"
+      $subopts
+      -vcodec copy -acodec copy
+      -metadata "title=$tags->{title}"
+      -metadata "artist=$tags->{artist}"
+      -metadata "album=$tags->{album}"
+      -metadata "comment=$tags->{description}"
+      -y "$ffmpeg_outfile"
+  )); #;
+
+  # Add subs and chapters with MP4Box if available.
+  if ($result==0 && $run_mp4box) {
+    my $pre_opts = '-quiet' unless $VERBOSE;
+    my $gen_opts;
+
+    if (-e $srtfile) {
+      $gen_opts .= qq( -add "$srtfile:hdlr=sbtl:lang=nor:group=2:layer=-1" );
+      _inform('  ' . 'Tar med undertekster.');
+    }
+
+    if (-e $chpfile) {
+      #$gen_opts .= qq( -chap "$chpfile" );     # try 1, ok for vlc
+      $gen_opts .= qq( -add "$chpfile:chap" );  # try 2
+      _inform('  ' . 'Tar med kapitler.');
+    }
+    
+    # MUST ADD METADATA TO MP4BOX
+    # MP4Box -itags Name=AdbA -add t.mp4 -new tt.mp4
+    
+    $pre_opts .= ' -itags "';
+    $pre_opts .= qq(name=$tags->{title}:);
+    $pre_opts .= qq(artist=$tags->{artist}:);
+    $pre_opts .= qq(album=$tags->{album}:);
+    $pre_opts .= qq(comment=$tags->{description});
+    $pre_opts .= '" ';
+    
+    $result = _system(qq(
+      $MP4BOX 
+        $pre_opts
+        -add "$ffmpeg_outfile" 
+        $gen_opts
+        -new "$mp4file"
+    ));
+    
+    if ($result==0) {
+      unlink($ffmpeg_outfile);
+    } else {
+      rename($ffmpeg_outfile, $mp4file);
+    }
+  }
+
+  return $result;
+}
+
+
+##############################################################################
+
+sub convert_to_mkv {
+  my ($flvfile, $srtfile, $chpfile, $mkvfile, $meta, $bare) = @_;
+  my $tags = meta2tags($meta);
+
+  _inform('Pakker mkv...');
+
+  # Need tempfile for mkvmerge
+  my $mkvfile_tmp = temp_filename('mkv');
+
+  my $loglevel = 'error';
+  $loglevel = 'info' if $VERBOSE;
+
+  # first rewrap
+  my $result = _system(qq(
+    $FFMPEG -v $loglevel
+      -i "$flvfile"
+      -vcodec copy -acodec copy
+      -metadata "title=$tags->{title}"
+      -metadata "artist=$tags->{artist}"
+      -metadata "performer=$tags->{artist}"
+      -metadata "album=$tags->{album}"
+      -metadata "collection=$tags->{album}"
+      -metadata "comment=$tags->{description}"
+      -metadata "description=$tags->{description}"
+      -y "$mkvfile_tmp"
+  )); #;
+
+  if ($result == 0) {
+
+    # then merge with srt/chp
+    if ( $MKVMERGE && (-e $srtfile || -e $chpfile) && !$bare ) {
+    
+      my $srtopts;
+      if (-e $srtfile) {
+        $srtopts = qq(--language 0:nor "$srtfile");
+        _inform('  ' . 'Tar med undertekster.');
+      }
+      my $chpopts;
+      if (-e $chpfile) {
+        $chpopts = qq(--chapter-language nor --chapter-charset utf8 --chapters "$chpfile");
+        _inform('  ' . 'Tar med kapitler.');
+      }
+      my $loglevel = '-q';
+      $loglevel = '' if $VERBOSE;
+
+      $result = _system(qq(
+        $MKVMERGE $loglevel
+          $chpopts
+          --title "$tags->{title}"
+          -o "$mkvfile"
+          "$mkvfile_tmp"
+          $srtopts
+      ));
+      
+      if ($result == 0) {
+        unlink($mkvfile_tmp);
+      } else {
+        return $result; # error
+      }
+      
+    } else {
+      rename($mkvfile_tmp, $mkvfile);
+    }
+    
+  } else {
+    return $result; # error
+  }
+  
+  return 0;
+  
+}
+
+
+##############################################################################
+
+# This is a simple parser using regex as we don't want to depend on
+# non-standard libraries. An XML parser would have been nice though.
+# 
+sub download_subtitles {
+  my ($suburl, $outfile, $duration, $meta) = @_;
+
+  if (!$duration) {
+    if ($meta->{duration_msec}) {
+      $duration = int($meta->{duration_msec} / 1000);
+    }
+  }
+
+  _inform('Laster ned undertekster...');
+  
+  my $tt = get_content($suburl);
+  
+  # we've been told there are subtitles
+  # but can't download them... (qualifies for a warning)
+  if (!$tt) {
+    _warn('Fant ingen undertekster.'); 
+    return;
+  }
+  
+  open my $f, ">$outfile" or _die('Feil ved skriving til fil: ' . $outfile);
+  binmode $f, ":utf8";
+  
+  my $n;
+  my $prev_end;
+  my $valid_10h;
+  
+  while ($tt =~ s/<p\s+(.*?)\s*>(.*?)<\s*\/\s*p\s*>//is) {
+    my ($attrs, $content) = ($1, $2);
+    $attrs =~ s/\s+/ /sg;
+
+    my $begin = $1 if $attrs =~ /begin\s*=\s*"\s*(.*?)\s*"/;
+    my $dur   = $1 if $attrs =~ /dur\s*=\s*"\s*(.*?)\s*"/;
+    my $style = $1 if $attrs =~ /style\s*=\s*"\s*(.*?)\s*"/;
+    
+    $content =~ s/<span\s+style\s*=\s*"\s*italic\s*"\s*>\s*(.*?)\s*<\s*\/\s*span\s*>/<i>$1<\/i>/sig;
+    $content =~ s/\s*<\s*br\s*\/\s*>\s*/\n/sig;
+    
+    $content =~ s/(^|\n)([-—])([^\s])/$1$2 $3/sg;
+    
+    $content =~ s/^\s*(.*?)\s*$/$1/s;
+    $content =~ s/^\s*(.*?)\s*$/$1/m;
+    
+    next unless ($begin && $dur && $content);
+    
+    my ($sh, $sm, $ss, $sf) = ($1, $2, $3, $4) if ($begin =~ /^(\d+):(\d+):(\d+).(\d+)$/);
+    my ($dh, $dm, $ds, $df) = ($1, $2, $3, $4) if ($dur   =~ /^(\d+):(\d+):(\d+).(\d+)$/);
+  
+    # Fix for NRK subs. Some timecodes have less than 3 digits i the decimal part
+    # of seconds (hh:mm:ss.fff) and these are not what they seem! 
+    # 00:00:58.600 and 00:00:58.60 is not the same.
+    # The last one is really 00:00:58.060!
+    # Without correcting this we'll soon get overlapping subtitles which will
+    # break some players (at least Quicktime).
+    #
+    $sf = "0$sf" while length($sf)<3; # make sure we have 3 digits
+    $df = "0$df" while length($df)<3;
+    $ss = "$ss.$sf"; # merge into floating seconds
+    $ds = "$ds.$df";
+
+    my ($eh, $em, $es) = ($sh+$dh, $sm+$dm, $ss+$ds);
+    
+    if ($es > 59.999) { $em++; $es-=60 }
+    if ($em > 59) { $eh++; $em-=60 }
+
+    # Experimental fix for subs starting at 10:00:00.000 (or above).
+    # Don't know the reason for these subs.
+    # One such is: http://tv.nrk.no/serie/riksforsamlinga/kmte61006209/sesong-1/episode-2
+    if ($sh>=10 && $eh>=10 && !$valid_10h) {
+      $sh-=10;
+      $eh-=10;
+    }
+    $valid_10h = 1 if $sh==9;
+    
+    my $start = sprintf("%02d:%02d:%06.3f", $sh, $sm, $ss);
+    #$es += 0.01 if ($eh==$sh && $em==$sm && $es==$es);
+    my $end = sprintf("%02d:%02d:%06.3f", $eh, $em, $es);
+
+    next if $start eq $end; # some players don't like these
+
+    # overlapping?    
+    _warn("Overlappende undertekst starter $start (forrige slutter ikke før $prev_end).") if $start lt $prev_end;
+  
+    # make sure subs are not longer than the video
+    if ($duration) {
+      my $end_sec = $eh*60*60 + $em*60 + $es;
+      last if $end_sec >= $duration;
+    }
+
+    # srt use comma
+    $start =~ s/\./,/;
+    $end =~ s/\./,/;
+
+    #
+    $n++;
+    print $f "$n\n$start --> $end\n$content\n\n";
+    
+    $prev_end = $end;
+    $prev_end =~ s/,/./;
+  }
+  
+  
+  close $f;
+  
+  _inform('  ' . "$n tekster");
+  
+}
+
+
+##############################################################################
+
+sub extract_chapters {
+  my ($html, $outfile, $duration, $meta) = @_;
+
+  if (!$duration) {
+    if ($meta->{duration_msec}) {
+      $duration = int($meta->{duration_msec} / 1000);
+    }
+  }
+    
+  my %chapters;
+  
+  if ($html =~ /.*id="indexPoints"/is) {
+
+    _inform('Henter ut kapitler...') if $outfile;
+  
+    # Harvest all indexpoints.
+    # We will get duplicates so we filter them through a hash.
+    while ($html =~ s/indexpoint-link.*?title="\s*(.*?)\s*".*?>\s*(.*?)\s*<\/a>//is) {
+      my ($title, $content) = ($1, $2);
+      
+      if ($title =~ /^([\d:]+)\s+(.*?)$/) {
+        my $tc = $1;
+        $content =~ s/^\d+\.\s*//;
+        $chapters{$tc} = decode_entities($content);
+      }
+    
+    }
+  
+    if ($outfile && keys %chapters) {
+      open my $f, ">$outfile" or _die('Feil ved skriving til fil: ' . $outfile);
+      binmode $f, ":utf8";
+  
+      my $n;
+      
+      foreach my $tc (sort keys %chapters) {
+      
+        if ($duration) {
+          my ($hh, $mm, $ss) = split /\:/, $tc;
+          last if ($hh*60*60 + $mm*60 + $ss) >= $duration - 5; # 5 seconds safe margin 
+        }
+      
+        $n++;
+        
+        printf $f "CHAPTER%02d=%s.000\n", $n, $tc;
+        printf $f "CHAPTER%02dNAME=%s\n", $n, $chapters{$tc};
+      }
+  
+      close $f;  
+      
+      _inform('  ' . "$n kapitler");
+    }
+  
+  }
+  
+  return keys %chapters ? \%chapters : undef;
+}
+
+
+##############################################################################
+
+sub store_ttxt_chapters {
+  my ($chapters, $outfile) = @_;
+  
+  if (open my $f, ">$outfile") {
+    binmode $f, ':utf8';
+    
+    print $f qq(<?xml version="1.0" encoding="UTF-8" ?>
+      <!-- GPAC 3GPP Text Stream -->\n
+      <TextStream version="1.1">\n
+        <TextStreamHeader width="480" height="368" layer="0" translation_x="0" translation_y="0">
+          <TextSampleDescription horizontalJustification="center" verticalJustification="bottom" backColor="0 0 0 0" verticalText="no" fillTextRegion="no" continuousKaraoke="no" scroll="None">
+            <FontTable>
+              <FontTableEntry fontName="Serif" fontID="1"/>
+            </FontTable>
+            <TextBox top="0" left="0" bottom="368" right="480"/>
+            <Style styles="Normal" fontID="1" fontSize="32" color="ff ff ff ff"/>
+          </TextSampleDescription>
+        </TextStreamHeader>
+    \n);
+    
+    foreach my $tc (sort keys %$chapters) {
+      print $f '        ' . 
+        qq(<TextSample sampleTime="$tc.000">$chapters->{$tc}</TextSample>\n);
+    }
+    
+    print $f qq(
+      </TextStream>
+    );
+    
+    close $f;
+  } else {
+    _warn('Feil ved skriving til fil: ' . $outfile);
+  }
+
+}
+
+
+##############################################################################
+
+sub download_review {
+  my ($review_url, $revfile, $meta) = @_;
+
+  my $review = get_content($review_url);
+
+  if ($review) {
+    _inform('Laster ned omtale...');
+    if ( open(my $f, ">$revfile") ) {
+      binmode $f, ":utf8";
+
+      print $f qq(<html>
+        <head>
+          <title>$meta->{title}</title>
+          <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+          <meta charset="UTF-8" />
+        </head>
+        <body>
+          <h1>$meta->{title}</h1>
+          <a href="$url">$url</a>
+          <h2>Omtale</h2>
+      \n);
+      print $f $review;
+      print $f qq(</body>\n</html>\n);
+      close $f;
+    } else {
+      _warn('Feil ved skriving til fil: ' . $revfile);
+      return 0;
+    }
+  } else {
+    return 0;
+  }
+
+  return 1;
+}
+
+
+##############################################################################
+##############################################################################
+##############################################################################
+##############################################################################
+##############################################################################
+### MISC
+##############################################################################
+
+
+sub read_batchfile {
+  my ($filename) = @_;
+
+  _inform('Les satsvis fil...');
+
+  my @urls;
+  my $garbage_cnt;
+
+  open my $f, $filename or _die("Får ikkje til å opne fila: $filename");
+  while (my $line = <$f>) {
+
+    chomp $line;
+    $line =~ s/^\s*(.*?)\s*$/$1/;
+    next unless $line;
+    next if $line =~ /^#/;
+    last if ($line !~ /^https?:/);
+
+    _inform("  $line");
+    push @urls, $line;
+  }
+  close $f;
+
+  my $cnt = scalar(@urls);
+  
+  _inform("Fant $cnt videoer");
+
+  return @urls;
+}
+
+
+##############################################################################
+
+sub get_surroundings {
+  my ($get_files, $time_gap) = @_;
+
+  $time_gap ||= 60*60*6;
+
+  opendir my $d, '.';
+  my @files = grep !/^\./, readdir $d;
+  closedir $d;
+  
+  my $recent = time() - $time_gap; # 12 hours ago
+  my %data;
+  
+  foreach my $file (@files) {
+    
+    if ($file =~ /_Seg\d+-Frag\d+$/i) { 
+      my @stat = stat($file);
+      if ( $stat[9] < $recent) {
+        push @{$data{files}}, $file if $get_files;
+        $data{count_frags}++;
+        $data{frag_size} += $stat[7];
+      }
+    }
+  
+    if ($file =~ /^nrk-opptak\.tmp(\.\d+)?\.(flv|mkv|mp4|srt|chp)$/) {
+      my @stat = stat($file);
+      if ( $stat[9] < $recent) {
+        push @{$data{files}}, $file if $get_files;
+        $data{count_temps}++;
+        $data{temp_size} += $stat[7];
+      }
+    }
+
+  }
+  
+  $data{frag_size} = int( $data{frag_size} / (1024*1024) );
+  $data{temp_size} = int( $data{temp_size} / (1024*1024) );
+  
+  return \%data;
+}
+
+
+##############################################################################
+
+sub check_surroundings {
+  my ($surr, $skip_usage) = @_;
+
+  $surr ||= get_surroundings(0, 60*60*6);
+
+  my $found;
+
+  if ($surr->{count_frags}) {
+    _inform();
+    _inform("Fant $surr->{count_frags} gamle HDS fragmentfiler som bruker $surr->{frag_size} MB i denne mappa.");
+    _inform('Om ikke en annen nedlasting holder på, kan du slette disse filene.');
+    $found++;
+  }
+  
+  if ($surr->{count_temps}) {
+    _inform();
+    _inform("Fant $surr->{count_temps} gamle midlertidige filer som bruker $surr->{temp_size} MB i denne mappa.");
+    _inform('Om ikke en annen nedlasting holder på, kan du slette disse filene.');
+    $found++;
+  }
+
+  if ($found && !$skip_usage) {
+    _inform();
+    _inform("Kjør  $SCRIPT_NAME Y  for å rydde opp.");
+  }
+
+}
+
+
+##############################################################################
+
+sub cleanup_surroundings {
+
+  my $surr = get_surroundings(1, 0.001);
+  
+  check_surroundings($surr, 1);
+
+  if (!$surr->{files}) {
+    print 'Alt ser fint ut.' . "\n\n";
+    return;
+  }
+
+  my $action;
+  
+  while (!$action) {
+    print "\n";
+    print 'Slett disse filene, Vis filene eller Avbryt (s/v/A)? ';  
+    $action = <STDIN>;
+    chomp $action;
+    $action = "key<$action>" if $action;
+    print "\n";
+
+    if ($action eq 'key<s>') {
+      foreach my $file (@{$surr->{files}}) { unlink($file) }
+      print "\n";
+      print "Ok.\n";
+    }
+    elsif ($action eq 'key<v>') {
+      foreach my $file (@{$surr->{files}}) { print "  $file\n" }
+      print "\n"; $action = undef;
+    }
+    else {
+      _die('Avslutter.' . "\n");
+    }
+  }
+  
+  print "\n";
+}
+
+
+##############################################################################
+
+sub get_content {
+  my ($url, $outfile) = @_;
+  
+  my $ua = LWP::UserAgent->new();
+
+  if ($outfile) {
+    my $response = $ua->get($url, ':content_file'=>$outfile);
+  } else {
+    my $response = $ua->get($url); 
+    return undef unless $response->is_success;
+    return $response->decoded_content;
+  }
+}
+
+
+##############################################################################
+
+sub test_more {
+
+  my @paths = split /\s*[;|:]\s*/, $ENV{PATH};
+  
+  my $nonex;
+  print 'Søkestier' . "\n";
+  foreach my $path (@paths) {
+    print "  $path\n" if -e $path;
+    $nonex++ if !-e $path;
+  }
+
+  if ($nonex) {
+    print "\n" . 'Ikke-eksisterende søkestier' . "\n";
+    foreach my $path (@paths) {
+      print "  $path\n" if !-e $path;
+    }
+  }    
+}
+
+
+##############################################################################
+
+sub temp_filename {
+  my ($ext) = @_;
+
+  my $filename = "nrk-opptak.tmp";
+
+  my $dir;
+  $dir = 'temp' if -d 'temp';
+  $dir = 'tmp' if -d 'tmp';
+  $filename = "$dir/$filename" if $dir;
+
+  while (-e "$filename.$ext") {
+    if ($filename =~ s/\.(\d+)$//) {
+      $filename .= '.' . ($1+1);
+    } else {
+      $filename .= '.2';
+    }
+  }
+  return "$filename.$ext";
+}
+
+
+##############################################################################
+
+sub detect_helpers {
+  my ($silent) = @_;
+
+  my $home = $ENV{HOME};
+  my $homebin = "$home/bin";
+
+  # AdobeHDS.php
+  $ADOBEHDS_SCRIPT = find_file('AdobeHDS.php', '.') unless $ADOBEHDS_SCRIPT;
+  if (!$ADOBEHDS_SCRIPT) {
+    $ADOBEHDS_SCRIPT = which('AdobeHDS.php'); # will most likely not work
+    $ADOBEHDS_SCRIPT ||= find_file('AdobeHDS.php', '$', $homebin, $home, '/', 'C:/', '..');
+    $ADOBEHDS_SCRIPT ||= 'AdobeHDS.php' if $OS_WIN;
+  }
+
+  # PHP
+  $PHP = detect_binary('php', win_paths => ['/PHP', 'C:/PHP']) unless $PHP;
+  
+  # ffmpeg
+  $FFMPEG = which('avconv');
+  $FFMPEG = detect_binary('ffmpeg',
+    error => $silent ? '' : 'Feil: Fant ikke ffmpeg eller avconv. Hopper over mp4/mkv.',
+    mac_paths => [
+      '$home/Applications', 
+      '$home/Applications/ffmpeg',
+      '/Applications', 
+      '/Applications/ffmpeg'
+    ]
+  ) unless $FFMPEG;    
+
+  # mkvmerge
+  $MKVMERGE = detect_binary('mkvmerge',
+    error => $silent ? '' : 'Feil: Fant ikke mkvmerge. Hopper over undertekster/kapitler i mkv.',
+    mac_paths => [
+      "$home/Applications/Mkvtoolnix.app/Contents/MacOS",
+      "$home/Applications/Video/Mkvtoolnix.app/Contents/MacOS",
+      '/Applications/Mkvtoolnix.app/Contents/MacOS',
+      '/Applications/Video/Mkvtoolnix.app/Contents/MacOS',
+    ]
+  ) unless $MKVMERGE;    
+  
+  # MP4Box
+  if ($USE_MP4BOX) {
+    $MP4BOX = detect_binary('MP4Box',
+      mac_paths => [
+        "$home/Applications/Osmo4.app/Contents/MacOS",
+        "$home/Applications/Video/Osmo4.app/Contents/MacOS",
+        "/Applications/Osmo4.app/Contents/MacOS",
+        "/Applications/Video/Osmo4.app/Contents/MacOS",
+      ]
+    ) unless $MP4BOX;
+  } else {
+    $MP4BOX = undef;
+  }
+  
+  # MediaInfo
+  $MEDIAINFO = detect_binary('mediainfo') unless $MEDIAINFO;
+  
+  # ffmpeg subtitles codec
+  if ($FFMPEG && !$FFMPEG_SCODEC) {
+    $FFMPEG_SCODEC   = 'mov_text' if `$FFMPEG -v error -codecs | grep mov_text`;
+    $FFMPEG_SCODEC ||= 'dvdsub'   if `$FFMPEG -v error -codecs | grep dvdsub`;
+    _warn('Feil: Fant ikke codec for undertekster. Hopper over undertekster i mp4.')
+      unless $FFMPEG_SCODEC;
+  }
+
+}
+
+
+##############################################################################
+
+sub detect_binary {
+  my ($name, %args) = @_;
+
+  my $home = $ENV{HOME};
+  my $homebin = "$home/bin";
+
+  my $bin = find_file($name, '.');
+  
+  if (!$bin) {  
+    $bin = which($name);
+
+    if (!$bin) {
+      $bin = find_file($name, '$', $homebin, $home, '/', 'C:/');
+      $bin ||= find_file($name, @{$args{paths}}) if $args{paths};
+      $bin ||= find_file($name, @{$args{mac_paths}}) if $OS_MAC && $args{mac_paths};
+      $bin ||= find_file($name, @{$args{win_paths}}) if $OS_WIN && $args{win_paths};
+      $bin ||= $name if $OS_WIN;
+      _warn($args{error}) if !$bin && $args{error};
+    }  
+  }
+
+  return $bin;
+}
+
+
+##############################################################################
+
+sub find_file {
+  my ($filename, @paths) = @_;
+  return '' unless $filename;
+
+  foreach my $path (@paths) {
+    next unless $path;
+    $path =~ s/\/$//;
+    if ($path eq '$') {
+      $path = $0;
+      $path =~ s/^(.*)\/.*?$/$1/;
+    }
+    return "$path/$filename" if -e "$path/$filename" && !-d "$path/$filename";
+
+    return "$path/$filename.exe"
+      if $OS_WIN && -e "$path/$filename.exe" && !-d "$path/$filename.exe";
+  }
+  return '';
+}
+
+
+##############################################################################
+
+sub which {
+  my ($file) = @_;
+  return undef if $OS_WIN;
+  my $file = `which $file`;
+  chomp $file;
+  return $file if -e $file;
+  return undef;
+}
+
+# filename without path
+sub wo_path {
+  my ($filename) = @_;
+  $filename =~ s/^.*\/(.*?)$/$1/;
+  return $filename;
+}
+
+##############################################################################
+
+sub _system {
+  my ($cmd) = @_;
+  $cmd =~ s/\s+/ /sg;
+  $cmd =~ s/^\s*//;
+  print "\n" . c($COL_EXEC) . "\$ $cmd" . c() . "\n\n" if $DEBUG;
+  print "\n" if $VERBOSE && !$DEBUG;
+  col($COL_EXEC);
+  my $result = system($cmd);
+  col();
+  print "\n" if $VERBOSE && !$DEBUG;
+  return $result;
+}
+
+sub _inform {
+  print(@_, "\n") unless $QUIET>=2;
+}
+
+sub _warn {
+  print(STDERR c($COL_ERROR), @_, c(), "\n" ); 
+}
+
+sub _die {
+  _warn(@_);
+  col('reset');
+  die "\n";
+}
+
+
+##############################################################################
+
+sub c {
+  return if !$LOADED_ANSICOLOR || !$USE_COLORS;
+  my $col = shift;
+  $col ||= $COL_DEFAULT;
+  return color($col);
+}
+
+sub col { print c(@_) }
+
+
+##############################################################################
+
+sub check_helpers {
+
+  my @missing;
+  
+  push @missing, 'PHP' unless $PHP;
+  push @missing, 'AdobeHDS.php' unless $ADOBEHDS_SCRIPT;
+  push @missing, 'FFmpeg' unless $FFMPEG;
+  push @missing, 'MP4Box (GPAC)' unless $MP4BOX;
+  push @missing, 'mkvmerge (MKV ToolNix)' unless $MKVMERGE;
+  push @missing, 'MediaInfo' unless $MEDIAINFO;
+  
+  if (@missing) {
+    _warn('Mangler: ' . join(', ', @missing) . "\n");
+  }
+}
+
+
+sub help {
+  my $script = $SCRIPT_NAME;
+  
+  print qq(Dette skriptet laster ned video og lyd fra en nrk.no nettadresse.
+
+Bruk:  $script  kommandoer_og_valg  [varighet]  url  [ut_filnavn]
+       $script  kommandoer_og_valg  satsvis_fil  [ut_tagg]
+       $script  kommandoer_og_valg
+       $script  url
+
+URL
+    For NRK TV må dette være en tv.nrk.no-nettadresse for et enkelt program
+    eller en episode. Vanligvis begynner disse med http://tv.nrk.no/program/
+    eller http://tv.nrk.no/serie/.
+
+    For NRK Radio må dette være en radio.nrk.no-nettadresse for et enkelt
+    program. Disse begynner vanligvis med http://radio.nrk.no/serie/.
+
+    For NRK Skole må dette være en nettadresse til en klippdetalj-side: 
+    http://www.nrk.no/skole/klippdetalj ...
+
+Filer
+    Filnavn blir laget utfra tittelen til videoen, hvis ikke du oppgir et eget
+    ut_filnavn (uten filetternavn). For satsvis kjøring kan du legge til en
+    ut_tagg som vil komme først i filnavna.
+    
+    Videoer blir alltid først lasta ned fra NRK som flv-filer (selv om du har
+    spurt etter mp4 eller mkv). Flv-fila blir sletta etter at den er
+    konvertert til mp4 eller mkv, med mindre du har sagt du vil beholde den
+    (ved å oppgi f som kommando).
+    
+    Undertakster blir lasta ned som ei srt-fil. Kapitler blir lasta ned som ei
+    enkel matroska kapittelfil med .chp som etternavn.
+    
+    Når du lager ei mp4- eller mkv-fil med undertekster, vil srt-fila blir
+    lasta ned og lagra under prosessen. Denne fila vil bli sletta etterpå om
+    ikke du har bedt om å få beholde den (med kommandoen c). Det samme gjelder
+    for kapittel.
+    
+    I interaktiv modus (standard) vil du bli spurt før evt eksisterende filer
+    blir skrevet over. Du kan også velge å legge til en teller på slutten av 
+    filnavnet hvis fila allerede finnes.
+    
+    På det meste vil skriptet kunne lage åtte forskjellige filer: 
+
+      flv   flash video (f)         srt   undertekster (s)
+      mp4   mpeg4 video (m)         chp   kapitler (c)
+      mkv   matroska video (k)      txt   metadata (I)
+                                    html  programomtale (x)
+                                    jpg   frimerkebilde (x)
+
+    En rekke midlertidige filer vil bli opprettet under nedlastingen. Disse
+    vil bli lagret i lokal underkatalog 'tmp' eller 'temp' hvis en av disse
+    finnes.
+    
+Satsvis kjøring
+    Bruk satsvis kjøring for å laste ned flere videoer på en gang.
+
+    Den satsvise fila er ei enkel tekstfil med liste over nettadresser (ei på
+    hver linje). Du kan ha tomme linjer i tekstfila, og kommentarer som
+    begynner med nummertegn (#).
+
+Direktesending
+    Når du tar opp en direktesending, må du bruke valget 'l'. Det kan også
+    være en god ide å angi varighet (i minutter eller minutter:sekunder).
+    
+
+Kommandoer
+    m     last ned video, undertekster og kapitler som mp4 (mpeg4)
+    k     last ned video, undertekster og kapitler som mkv (matroska)
+
+    M     last ned kun video som mp4 (mpeg4)
+    K     last ned kun video som mkv (matroska)
+
+    f     last ned video som flv (flash video)
+
+    s     last ned undertekster som en srt-fil
+    c     last ned kapitler (.chp)
+
+    i     vis metainformasjon
+    I     lagre metainformasjon til fil (.txt)
+    
+    t     test (harmløs)
+    Y     rydd opp (slett gamle midlertidige filer)
+    
+Val
+    1     høg kvalitet (standard)
+    2     medium kvalitet
+    3     lav kvalitet
+
+    l     direkteopptak (bruk denne for å ta opp direktesending)
+
+    x     henter alle tilleggsfiler og legger alt i en underkatalog
+          (krever m, k eller f)
+
+    n     interaktiv (vil spørre før overskriving av filer; standard)
+    a     legge en teller til i filnavnet hvis det allerede finnes
+    y     skriv over filer som finnes fra før
+
+    q     stille (mindre verbal, qq er stillere, qqq er helt stille)
+    v     verbal
+    d     debug
+
+Eksempel
+    Last ned video som flv:             $script f http://tv.nrk.no/...
+    Video (som flv) og undertekster:    $script fs http://tv.nrk.no/...
+    Video og undertekster som mp4-fil:  $script m http://tv.nrk.no/...
+    Skriv over eksisterende filer:      $script my http://tv.nrk.no/...
+    Last ned bare undertekster:         $script s http://tv.nrk.no/...
+    Mkv-fil i lav kvalitet:             $script k3 http://tv.nrk.no/...
+    Satsvis nedlasting (som mkv):       $script k mylist.txt
+    Ta opp direkte i 30 minutter:       $script ml 30 http://tv.nrk.no/...
+
+Dette skriptet bruker disse programmene og bibliotekene:
+AdobeHDS.php (av KSV), FFmpeg, Libav/avconv, GPAC og MKV ToolNix.
+  \n);
+}
+
+
+##############################################################################
+### END
+

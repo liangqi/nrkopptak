@@ -1,0 +1,108 @@
+
+NRK-OPPTAK / NRK-RECORDER
+
+CHANGES
+
+=============================================================================
+
+
+
+
+
+
+
+
+
+
+
+-----------------------------------------------------------------------------
+-6-
+
+Updated README and COMPAT.
+Minor cosmetics.
+
+-----------------------------------------------------------------------------
+-5-
+
+Now also working with radio.nrk.no, nrk.no/skole and www.nrk.no. NRK Radio is
+just like NRK TV. NRK Skole and the NRK website in general get videos from
+nrk.no/embed/.
+
+-----------------------------------------------------------------------------
+-4-
+
+Add 'omtale' to metadata.
+
+Add start date and time to filename for live recording.
+
+AdobeHDS will now use existing 'tmp' or 'temp' sub directories for
+fragment files.
+
+MP4Box is added for better support for subtitles in mp4 files.
+
+Allow download of mp4 and mkv without subtitles.
+Options: M and K
+
+Chapters in mp4 files (MP4Box w/ttxt).
+
+
+-----------------------------------------------------------------------------
+-3-
+
+Allow putting resulting files in subdirectory.
+Option: see x
+
+Option: x
+Downloading all supporting files (in addition to video).
+All saved in a sub folder.
+Requires video download (mx, kx, fx).
+
+Download thumbnail (jpg).
+Option: part of x
+
+
+-----------------------------------------------------------------------------
+-2-
+
+Supports recording of live streaming.
+
+Allow storing info/metadata.
+Option: I
+
+
+-----------------------------------------------------------------------------
+-1-
+
+Removed as many dependencies as possible.
+
+Subtitles are now handled internally (which skips a few perl modules).
+This will hopefully help installation on non-linux comps.
+
+You will need PHP and AdobeHDS.php. This is still the most reliable 
+solution to get the high quality streams. 
+
+You can still piggyback nrk-subtitles if you want. But we have our own internal
+subs converter.
+
+I've added repackaging to mp4 and mkv with subtitles. The latter one also
+incorporates chapters into the package.
+
+Also added more screen scraping and metadata extraction from the html.
+
+
+-----------------------------------------------------------------------------
+-0-
+
+This script originally based on:
+
+NRK video and subtitles download script
+By Ingvar (updated by Morpfh)
+
+And code and comments from
+http://ingvar.blog.redpill-linpro.com/2012/05/31/downloading-hd-content-from-tv-nrk-no/
+by Ingvar, Isak, Frode, Finn Andersen, Kari Normann, Tengil.
+
+
+Uses AdobeHDS.php (by KSV).
+
+

@@ -1,0 +1,82 @@
+
+NRK-OPPTAK / NRK-RECORDER
+
+VIDEO PLAYER COMPATIBILITY
+
+===============================================================================
+
+
+
+-------------------------------------------------------------------------------
+2013-03-07
+                    MP4                       MKV
+                    -----------------------   -----------------------
+                    Subs  SLang Chap  Meta    Subs  SLang Chap  Meta
+                    ----- ----- ----- -----   ----- ----- ----- -----
+mediainfo           tx3g  nor   tx3g  YES     stext nor   Menu  YES
+                                          
+mplayer r34540      YES^  YES   YES   -       YES   YES   YES   -
+Ubuntu 12.04                              
+                                         
+SMPlayer 0.7.0      Yes*^ YES   YES   YES     Yes*  YES   YES   Yes 
+Ubuntu 12.04                              
+                                          
+Totem 3.0.1         No^   No    No    YES     YES   YES   No    Yes*
+Ubuntu 12.04                              
+                                          
+VLC 2.0.5           YES   YES   YES   YES     YES   YES   YES   Yes**
+Ubuntu 12.04                              
+                                          
+Quicktime Player    YES   YES   YES   YES     -     -     -     -
+MacOSX 10.8                               
+                                          
+VLC 2.0.5           YES   YES   YES   YES     YES   YES   YES   Yes
+MacOSX 10.8                               
+                                          
+MPlayerOSX Ext 14   YES   YES   YES   No      YES   YES   ?     No
+MacOSX 10.8
+                    ----- ----- ----- -----   ----- ----- ----- -----
+
+   * MP4 subtitles disappears too fast. 
+     MKV subtitles show square at line break.
+     MKV metadata 'comment' not showing.
+
+  ** MKV metadata 'artist' not showing.
+
+   ^ Lists extra subtitle track
+
+
+-------------------------------------------------------------------------------
+2013-03-04
+                    SubMP4 SLangMP4 SubMKV SLangMKV ChMP4 ChMKV MetaMP4 MetaMKV
+                    ------ -------- ------ -------- ----- ----- ------- -------
+mediainfo           tx3g   nor   s_text    und      Menu  Menu  No      YES
+
+mplayer r34540      No     -        YES    -        YES   YES   ?       ?
+Ubuntu 12.04
+
+SMPlayer 0.7.0      Yes    -        Yes    -        No    No    ?       ?
+Ubuntu 12.04
+
+Totem 3.0.1         No     No       YES    und      No    No    ?       ?
+Ubuntu 12.04
+
+VLC 2.0.5           YES    YES      YES    YES      YES   YES   ?       Yes
+Ubuntu 12.04
+
+Quicktime Player    YES    YES      -      -        No    No    ?       -
+MacOSX 10.8
+
+VLC 2.0.2           YES    YES      YES*   YES      YES   YES   ?       Yes
+MacOSX 10.8
+
+VLC 2.0.5           YES    YES      YES*   YES      YES   YES   ?       Yes
+MacOSX 10.8
+
+MPlayerOSX Ext 14   YES    YES      YES*   YES      ?     ?     No      No
+MacOSX 10.8
+
+MKV subs are on by default. MP4 is off.
+
+
+
