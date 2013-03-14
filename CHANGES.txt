@@ -6,20 +6,18 @@ CHANGES
 =============================================================================
 
 
+-----------------------------------------------------------------------------
+0.1.3b
 
-
-
-
-
-
-
-
+Fixed bug in subtitles where space close to tag disappears.
+Minor updates in translations.
 
 -----------------------------------------------------------------------------
 -6-
 
 Updated README and COMPAT.
 Minor cosmetics.
+No longer support for nrk-subtitles script.
 
 -----------------------------------------------------------------------------
 -5-
