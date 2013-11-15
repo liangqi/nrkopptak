@@ -13,6 +13,7 @@ NOTES
   Windows
 FILES
 LICENSE AND SOURCE CODE
+USAGE
 
 =============================================================================
 
@@ -216,8 +217,6 @@ at these locations:
   
   MediaInfo (LGPLv2)
   http://mediainfo.sourceforge.net
-
-
 
 
 
