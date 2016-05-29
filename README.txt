@@ -158,7 +158,7 @@ MP4Box (GPAC) is available here: http://gpac.wp.mines-telecom.fr/
 I think all perl modules currently in use comes with OS X. If not then you need
 to do this in a terminal window:
 
-  sudo cpan -i LWP::UserAgent HTML::Entities Text::Wrap Term::ANSIColor
+  sudo cpan -i LWP::UserAgent HTML::Entities Text::Wrap Term::ANSIColor URI::Escape
 
 You'll need Xcode installed (from AppStore).
 
