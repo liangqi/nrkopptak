@@ -5,6 +5,10 @@ CHANGES
 
 =============================================================================
 
+0.1.3c
+
+Updated due to changed location for manifest and subtitle
+Added URI::Escape to decode subtitle URL
 
 -----------------------------------------------------------------------------
 0.1.3b

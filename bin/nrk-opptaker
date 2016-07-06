@@ -151,8 +151,8 @@ sub __main {}
 
 our $NAME = 'nrk-opptak';
 our $BY = 'falkeklubben';
-our $VERSION = '0.1.3b';
-our $BUILD = '228'; # in lack of a better word
+our $VERSION = '0.1.3c';
+our $BUILD = '229'; # in lack of a better word
 our $LANG = 'nb';
 
 ##############################################################################
@@ -161,7 +161,7 @@ use LWP::UserAgent;
 use HTML::Entities;
 use Encode;
 use Text::Wrap;
-
+use URI::Escape;
 
 # Non-essential modules
 my $LOADED_ANSICOLOR;
@@ -448,7 +448,13 @@ sub process {
   my $output_to_dir = 1 if $cmd->{subdir};
 
   my $html = get_content($url);
-
+  my $json;
+  my $progid;
+  
+  if ($html =~ /programid.*"(.*?)"/) {
+    $progid = $1;
+    $json = get_content("https://psapi-we.nrk.no/mediaelement/$progid");
+  }
 
   # Quality
   my $quality = 'high';
@@ -507,8 +513,8 @@ sub process {
   my $ttxt_tmpfile = temp_filename('ttxt'); # for mp4 chapters  
 
   # Get urls
-  my $manifest_url = get_manifest_url($html, $cmd->{live}, $meta->{source} );
-  my $subtitles_url = get_subtitles_url($html);
+  my $manifest_url = get_manifest_url($html, $cmd->{live}, $meta->{source}, $json );
+  my $subtitles_url = get_subtitles_url($html, $json);
   my $review_url = get_review_url($html);
 
   $meta->{url_manifest} = $manifest_url;
@@ -1094,14 +1100,14 @@ sub get_source {
 ##############################################################################
 
 sub get_manifest_url {
-  my ($html, $use_session_key, $source) = @_;
+  my ($html, $use_session_key, $source, $json) = @_;
 
   my $url;
 
   if ($source eq 'nrkskole' || $source eq 'nrk') {
     $url = get_manifest_url_nrkembed($html, $use_session_key);
   } else {
-    $url = get_manifest_url_nrktv($html, $use_session_key);
+    $url = get_manifest_url_nrktv($use_session_key, $json);
   }
 
   _warn('Adressa til manifestet ser ikke riktig ut.' . "\n$url\n") if $url && $url !~ /\.f4m\b/;
@@ -1116,11 +1122,11 @@ sub get_manifest_url {
 ##############################################################################
 
 sub get_manifest_url_nrktv {
-  my ($html, $use_session_key) = @_;
-
-  if ($html =~ /data-media\s*=\s*"(.*?)"/) {
+  my ($use_session_key, $json) = @_;
+      
+  if ($json =~ /mediaUrl":"(http.*?)"/) {
     my $url = $1;
-    
+
     if ($url) {
       $url =~ s/\?ma=on$// if ($use_session_key && $SESSION_KEY);
       
@@ -1133,6 +1139,7 @@ sub get_manifest_url_nrktv {
       return $url;
     }
   }     
+
 
   return undef;
 }
@@ -1178,9 +1185,12 @@ sub get_manifest_url_nrkembed {
 ##############################################################################
 
 sub get_subtitles_url {
-  my ($html) = @_;
+  my ($html, $json) = @_;
 
-  if ($html =~ /data-subtitlesurl\s*=\s*"(.*?)"/) {
+  if ($json =~ /timedTextSubtitlesUrl":"(http.*?)"/) {
+    my $url = uri_unescape($1);
+    return $url;
+  } elsif ($html =~ /data-subtitlesurl\s*=\s*"(.*?)"/) {
     my $url = $1;
     $url = "http://tv.nrk.no$url" if $url =~ /^\//;
     return $url;
